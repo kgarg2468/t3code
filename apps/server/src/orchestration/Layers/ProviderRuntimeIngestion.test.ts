@@ -3624,4 +3624,206 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
   });
+
+  it("segments buffered reasoning around answers with monotonic message stamps", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-buffered");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-summary"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_summary_text", delta: "Inspecting files" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-answer-after-reasoning"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("answer-after-reasoning"),
+      payload: { streamKind: "assistant_text", delta: "Answer" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-answer-after-reasoning-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("answer-after-reasoning"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-second-segment"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Checking results" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) => {
+      const reasoning = entry.messages.filter((message) => message.channel === "reasoning");
+      return reasoning.length === 2 && reasoning.every((message) => !message.streaming);
+    });
+    expect(thread.messages.map((message) => [message.channel, message.text])).toEqual([
+      ["reasoning", "Inspecting files"],
+      [undefined, "Answer"],
+      ["reasoning", "Checking results"],
+    ]);
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const messageEvents = events.filter(
+      (event): event is Extract<(typeof events)[number], { type: "thread.message-sent" }> =>
+        event.type === "thread.message-sent" && event.payload.threadId === "thread-1",
+    );
+    const messageTimes = messageEvents.map((event) => Date.parse(event.payload.createdAt));
+    expect(
+      messageTimes.every((time, index) => index === 0 || time > messageTimes[index - 1]!),
+    ).toBe(true);
+  });
+
+  it("streams both reasoning delta kinds live and finalizes them on session exit", async () => {
+    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+    const turnId = asTurnId("turn-reasoning-streaming");
+    for (const [index, streamKind, delta] of [
+      [1, "reasoning_summary_text", "Plan "],
+      [2, "reasoning_text", "details"],
+    ] as const) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-reasoning-live-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-05-02T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        payload: { streamKind, delta },
+      });
+    }
+
+    await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.channel === "reasoning" && message.streaming && message.text === "Plan details",
+      ),
+    );
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-reasoning-session-exit"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-02T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {},
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.channel === "reasoning" && !message.streaming && message.text === "Plan details",
+      ),
+    );
+    expect(thread.messages.filter((message) => message.channel === "reasoning")).toHaveLength(1);
+  });
+
+  it("finalizes reasoning before a different turn, superseding turn, and visible activity", async () => {
+    const harness = await createHarness();
+    const emitReasoning = (turnId: TurnId, eventId: string, createdAt: string, delta: string) =>
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(eventId),
+        provider: ProviderDriverKind.make("opencode"),
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        payload: { streamKind: "reasoning_text", delta },
+      });
+
+    emitReasoning(
+      asTurnId("turn-reasoning-old"),
+      "evt-reasoning-old",
+      "2026-05-03T00:00:00.000Z",
+      "old turn",
+    );
+    emitReasoning(
+      asTurnId("turn-reasoning-next"),
+      "evt-reasoning-next",
+      "2026-05-03T00:00:01.000Z",
+      "next turn",
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-reasoning-superseded"),
+      provider: ProviderDriverKind.make("opencode"),
+      createdAt: "2026-05-03T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning-final"),
+    });
+    emitReasoning(
+      asTurnId("turn-reasoning-final"),
+      "evt-reasoning-final",
+      "2026-05-03T00:00:03.000Z",
+      "before tool",
+    );
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-task-after-reasoning"),
+      provider: ProviderDriverKind.make("opencode"),
+      createdAt: "2026-05-03T00:00:04.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning-final"),
+      payload: { taskId: "task-after-reasoning", description: "Run checks" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) => {
+      const reasoning = entry.messages.filter((message) => message.channel === "reasoning");
+      return (
+        reasoning.length === 3 &&
+        reasoning.every((message) => !message.streaming) &&
+        entry.activities.some((activity) => activity.id === "evt-task-after-reasoning")
+      );
+    });
+    expect(
+      thread.messages
+        .filter((message) => message.channel === "reasoning")
+        .map((message) => message.text),
+    ).toEqual(["old turn", "next turn", "before tool"]);
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const finalReasoningComplete = events.find(
+      (event) =>
+        event.type === "thread.message-sent" &&
+        event.payload.channel === "reasoning" &&
+        event.payload.text === "" &&
+        event.payload.turnId === "turn-reasoning-final",
+    );
+    const activity = events.find(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.id === "evt-task-after-reasoning",
+    );
+    expect(finalReasoningComplete?.sequence).toBeLessThan(activity?.sequence ?? 0);
+  });
 });

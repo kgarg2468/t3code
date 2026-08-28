@@ -9,7 +9,13 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
+import {
+  isReasoningMessage,
+  type MessageId,
+  type OrchestrationLatestTurn,
+  type OrchestrationMessageChannel,
+  type TurnId,
+} from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -167,6 +173,7 @@ function maxIsoTimestamp(a: string | null, b: string | null): string | null {
 export interface TimelineDurationMessage {
   id: string;
   role: "user" | "assistant" | "system";
+  channel?: OrchestrationMessageChannel | undefined;
   createdAt: string;
   updatedAt: string;
   streaming: boolean;
@@ -262,7 +269,7 @@ export function computeMessageDurationStart(
       lastBoundary = message.createdAt;
     }
     result.set(message.id, lastBoundary ?? message.createdAt);
-    if (message.role === "assistant" && !message.streaming) {
+    if (message.role === "assistant" && !isReasoningMessage(message) && !message.streaming) {
       lastBoundary = message.updatedAt;
     }
   }
@@ -458,7 +465,7 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
       nullTurnResponseIndex += 1;
       continue;
     }
-    if (message.role !== "assistant") {
+    if (message.role !== "assistant" || isReasoningMessage(message)) {
       continue;
     }
 
@@ -721,7 +728,11 @@ export function deriveMessagesTimelineRows(input: {
     : [];
   const activeTurnHasVisibleContent = activeEntries.some((entry) => {
     if (entry.kind === "message") {
-      return entry.message.role === "assistant" && (entry.message.text?.trim().length ?? 0) > 0;
+      return (
+        entry.message.role === "assistant" &&
+        !isReasoningMessage(entry.message) &&
+        (entry.message.text?.trim().length ?? 0) > 0
+      );
     }
     if (entry.kind === "work") {
       return (
@@ -994,6 +1005,14 @@ export function deriveMessagesTimelineRows(input: {
         createdAt: timelineEntry.createdAt,
         turnPlan: timelineEntry.turnPlan,
       });
+      continue;
+    }
+
+    if (
+      isReasoningMessage(timelineEntry.message) &&
+      !timelineEntry.message.streaming &&
+      timelineEntry.message.text.trim().length === 0
+    ) {
       continue;
     }
 

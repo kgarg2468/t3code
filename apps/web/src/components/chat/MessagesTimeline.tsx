@@ -1,4 +1,5 @@
 import {
+  isReasoningMessage,
   type EnvironmentId,
   type MessageId,
   type ScopedThreadRef,
@@ -34,6 +35,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { FileDiff } from "@pierre/diffs/react";
 import {
   deriveTimelineEntries,
+  formatDuration,
   workEntryDisplayIndicatesToolFailure,
   workEntrySignalsSevereFailure,
   workLogEntryIsToolLike,
@@ -644,7 +646,9 @@ function keyExtractor(item: MessagesTimelineRow) {
 }
 
 function getItemType(item: MessagesTimelineRow) {
-  return item.kind === "message" ? `message:${item.message.role}` : item.kind;
+  return item.kind === "message"
+    ? `message:${isReasoningMessage(item.message) ? "reasoning" : item.message.role}`
+    : item.kind;
 }
 
 interface TimelineMinimapItem {
@@ -695,7 +699,7 @@ function resolveFinalAssistantTextForTurn(
     if (row.message.role === "user") {
       break;
     }
-    if (row.message.role === "assistant") {
+    if (row.message.role === "assistant" && !isReasoningMessage(row.message)) {
       finalAssistantText = row.message.text ?? null;
     }
   }
@@ -975,7 +979,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
-        <AssistantTimelineRow row={row} />
+        isReasoningMessage(row.message) ? (
+          <ReasoningTimelineRow row={row} />
+        ) : (
+          <AssistantTimelineRow row={row} />
+        )
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
@@ -1129,6 +1137,40 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         <span>{row.label}</span>
         <Icon className="size-3.5" />
       </button>
+    </div>
+  );
+}
+
+function ReasoningTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const streaming = row.message.streaming;
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const expanded = userExpanded ?? streaming;
+  const Icon = expanded ? ChevronDownIcon : ChevronRightIcon;
+  const durationMs = Date.parse(row.message.updatedAt) - Date.parse(row.message.createdAt);
+  const label = streaming
+    ? "Thinking..."
+    : Number.isFinite(durationMs) && durationMs >= 1_000
+      ? `Thought for ${formatDuration(durationMs)}`
+      : "Thought";
+  const text = row.message.text;
+
+  return (
+    <div className="min-w-0 px-1 py-0.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        data-scroll-anchor-ignore
+        onClick={() => setUserExpanded(!expanded)}
+        className="flex cursor-pointer select-none items-center gap-1 rounded-md text-sm leading-relaxed text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      >
+        <span>{label}</span>
+        <Icon className="size-3.5" />
+      </button>
+      {expanded ? (
+        <div className="mt-1 whitespace-pre-wrap border-l-2 border-border/60 pl-3 text-sm leading-relaxed text-muted-foreground">
+          {text}
+        </div>
+      ) : null}
     </div>
   );
 }

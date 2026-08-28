@@ -448,6 +448,7 @@ describe("orchestration projector", () => {
             threadId: "thread-1",
             messageId: "assistant:msg-1",
             role: "assistant",
+            channel: "reasoning",
             text: "hello",
             turnId: "turn-1",
             streaming: true,
@@ -472,6 +473,7 @@ describe("orchestration projector", () => {
             threadId: "thread-1",
             messageId: "assistant:msg-1",
             role: "assistant",
+            channel: "reasoning",
             text: "",
             turnId: "turn-1",
             streaming: false,
@@ -484,12 +486,13 @@ describe("orchestration projector", () => {
 
     const message = afterComplete.threads[0]?.messages[0];
     expect(message?.id).toBe("assistant:msg-1");
+    expect(message?.channel).toBe("reasoning");
     expect(message?.text).toBe("hello");
     expect(message?.streaming).toBe(false);
     expect(message?.updatedAt).toBe(completeAt);
   });
 
-  it("prunes reverted turn messages from in-memory thread snapshot", async () => {
+  it("prunes reverted reasoning messages from in-memory thread snapshot", async () => {
     const createdAt = "2026-02-23T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);
 
@@ -625,6 +628,7 @@ describe("orchestration projector", () => {
           threadId: "thread-1",
           messageId: "assistant-msg-2",
           role: "assistant",
+          channel: "reasoning",
           text: "Updated README to v3.\n",
           turnId: "turn-2",
           streaming: false,

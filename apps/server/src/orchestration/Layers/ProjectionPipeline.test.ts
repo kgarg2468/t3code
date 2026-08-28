@@ -123,8 +123,9 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           threadId: ThreadId.make("thread-1"),
           messageId: MessageId.make("message-1"),
           role: "assistant",
+          channel: "reasoning",
           text: "hello",
-          turnId: null,
+          turnId: TurnId.make("turn-1"),
           streaming: false,
           createdAt: now,
           updatedAt: now,
@@ -151,13 +152,21 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const messageRows = yield* sql<{
         readonly messageId: string;
         readonly text: string;
+        readonly channel: string | null;
       }>`
         SELECT
           message_id AS "messageId",
-          text
+          text,
+          channel
         FROM projection_thread_messages
       `;
-      assert.deepEqual(messageRows, [{ messageId: "message-1", text: "hello" }]);
+      assert.deepEqual(messageRows, [
+        { messageId: "message-1", text: "hello", channel: "reasoning" },
+      ]);
+      const turnRows = yield* sql<{ readonly assistantMessageId: string | null }>`
+        SELECT assistant_message_id AS "assistantMessageId" FROM projection_turns
+      `;
+      assert.deepEqual(turnRows, []);
 
       const stateRows = yield* sql<{
         readonly projector: string;
@@ -2444,7 +2453,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
-  it.effect("does not fallback-retain messages whose turnId is removed by revert", () =>
+  it.effect("removes reasoning messages whose turnId is removed by revert", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
@@ -2603,6 +2612,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           threadId: ThreadId.make("thread-revert"),
           messageId: MessageId.make("assistant-remove"),
           role: "assistant",
+          channel: "reasoning",
           text: "removed",
           turnId: TurnId.make("turn-2"),
           streaming: false,

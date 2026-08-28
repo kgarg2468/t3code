@@ -490,6 +490,28 @@ describe("CheckpointReactor", () => {
       checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
     );
 
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-checkpoint-answer-complete"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make("answer-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.200Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-checkpoint-reasoning-complete"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make("reasoning-1"),
+        channel: "reasoning",
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.400Z",
+      }),
+    );
+
     NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "v2\n", "utf8");
     harness.provider.emit({
       type: "turn.completed",
@@ -502,7 +524,14 @@ describe("CheckpointReactor", () => {
       payload: { state: "completed" },
     });
 
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const events = await waitForEvent(
+      harness.engine,
+      (event) => event.type === "thread.turn-diff-completed",
+    );
+    const checkpointEvent = events.find((event) => event.type === "thread.turn-diff-completed");
+    if (checkpointEvent?.type === "thread.turn-diff-completed") {
+      expect(checkpointEvent.payload.assistantMessageId).toBe(MessageId.make("answer-1"));
+    }
     const thread = await waitForThread(
       harness.readModel,
       (entry) => entry.latestTurn?.turnId === "turn-1" && entry.checkpoints.length === 1,

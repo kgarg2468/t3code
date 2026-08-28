@@ -93,7 +93,10 @@ describe("computeMessageDurationStart", () => {
     );
   });
 
-  it("does not advance the boundary for a streaming message", () => {
+  it.each([
+    { label: "streaming", streaming: true },
+    { label: "completed reasoning", streaming: false, channel: "reasoning" as const },
+  ])("does not advance the boundary for a $label message", ({ streaming, channel }) => {
     const result = computeMessageDurationStart([
       {
         id: "u1",
@@ -105,9 +108,10 @@ describe("computeMessageDurationStart", () => {
       {
         id: "a1",
         role: "assistant",
+        ...(channel ? { channel } : {}),
         createdAt: "2026-01-01T00:00:30Z",
         updatedAt: "2026-01-01T00:00:40Z",
-        streaming: true,
+        streaming,
       },
       {
         id: "a2",
@@ -1310,6 +1314,21 @@ describe("deriveMessagesTimelineRows", () => {
             streaming: false,
           },
         },
+        {
+          id: "reasoning-tail-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:40Z",
+          message: {
+            id: "reasoning-tail" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Considering a follow-up.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:40Z",
+            updatedAt: "2026-01-01T00:00:45Z",
+            streaming: false,
+          },
+        },
       ],
       expandedTurnIds: new Set(["turn-1" as never]),
       isWorking: false,
@@ -1323,7 +1342,8 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" && row.message.role === "assistant",
     );
 
-    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true, false]);
+    expect(assistantRows.map((row) => row.showAssistantCopyButton)).toEqual([false, true, false]);
   });
 
   it("withholds assistant metadata while the active turn is still in progress", () => {
