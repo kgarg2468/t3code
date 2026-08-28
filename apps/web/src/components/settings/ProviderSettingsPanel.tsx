@@ -846,7 +846,12 @@ export function EnvironmentProviderSettings({
               <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
                 {rows.map((row) => renderProviderInstance(row, "list"))}
               </div>
-              <div className="flex min-h-10 shrink-0 items-center justify-between px-3">
+              <div
+                className={cn(
+                  "flex min-h-10 shrink-0 items-center justify-between px-3",
+                  rows.length > 0 && "border-t border-border/60",
+                )}
+              >
                 <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
                 {!readOnly ? (
                   <Tooltip>
