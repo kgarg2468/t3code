@@ -636,12 +636,12 @@ export function ProviderInstanceCard({
   }
 
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <div
         inert={readOnly}
         aria-disabled={readOnly || undefined}
         className={cn(
-          "flex min-h-16 items-center justify-between gap-3 border-b border-border/70 px-4 py-3",
+          "flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3",
           readOnly && "opacity-50 select-none",
         )}
       >
@@ -755,7 +755,7 @@ export function ProviderInstanceCard({
         </div>
       </div>
 
-      <div className="flex h-11 border-b border-border/70 px-1">
+      <div className="flex h-11 shrink-0 border-b border-border/70 px-1">
         {driverOption !== undefined ? (
           <button
             type="button"
@@ -779,9 +779,12 @@ export function ProviderInstanceCard({
       <div
         inert={readOnly}
         aria-disabled={readOnly || undefined}
-        className={cn("px-4 py-5", readOnly && "opacity-50 select-none")}
+        className={cn("lg:min-h-0 lg:flex-1", readOnly && "opacity-50 select-none")}
       >
-        <div className="space-y-5" hidden={visibleTab !== "configuration"}>
+        <div
+          className="space-y-5 px-4 py-5 lg:h-full lg:overflow-y-auto"
+          hidden={visibleTab !== "configuration"}
+        >
           <div>
             <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
               <span className="text-xs font-medium text-foreground">Display name</span>
@@ -838,7 +841,7 @@ export function ProviderInstanceCard({
           ) : null}
         </div>
         {driverOption !== undefined ? (
-          <div hidden={visibleTab !== "models"}>
+          <div className="px-4 py-5 lg:h-full lg:min-h-0" hidden={visibleTab !== "models"}>
             <ProviderModelsSection
               instanceId={instanceId}
               driverKind={driverKind}
