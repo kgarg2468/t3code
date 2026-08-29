@@ -619,6 +619,78 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("keeps the first substantive assistant message visible when reasoning leads the turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "reasoning-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Thinking",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-first-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-first" as never,
+            role: "assistant",
+            text: "I am checking the implementation.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:05Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:05Z",
+            turnId: "turn-1" as never,
+            label: "Read files",
+            tone: "tool",
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:07Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
+      "assistant-first-entry",
+      "assistant-final-entry",
+    ]);
+  });
+
   it("does not create a turn fold for an empty completed reasoning message", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

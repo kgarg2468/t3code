@@ -614,7 +614,8 @@ function deriveTurnFolds(input: {
       continue;
     }
     const firstAssistantEntry = group.entries.find(
-      (entry): entry is Extract<TimelineEntry, { kind: "message" }> => entry.kind === "message",
+      (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
+        entry.kind === "message" && !isReasoningMessage(entry.message),
     );
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {

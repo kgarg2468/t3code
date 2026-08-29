@@ -1735,7 +1735,7 @@ const make = Effect.gen(function* () {
         );
       if (
         event.type === "turn.started" ||
-        event.type === "runtime.error" ||
+        (event.type === "runtime.error" && !conflictsWithActiveTurn) ||
         event.type === "session.exited" ||
         terminalSessionState
       ) {
