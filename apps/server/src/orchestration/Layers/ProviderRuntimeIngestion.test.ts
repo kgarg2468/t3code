@@ -20,6 +20,7 @@ import {
   ProjectId,
   ProviderItemId,
   type ServerSettings,
+  type ServerSettingsPatch,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -197,7 +198,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ServerSettingsService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -242,7 +246,8 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
-    const layer = ProviderRuntimeIngestionLive.pipe(
+    const serverSettingsLayer = makeTestServerSettingsLayer(options?.serverSettings);
+    const ingestionLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
@@ -251,14 +256,16 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ThreadPlanProgress.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
-      Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
+      Layer.provideMerge(serverSettingsLayer),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );
+    const layer = Layer.merge(ingestionLayer, serverSettingsLayer);
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const serverSettings = await runtime.runPromise(Effect.service(ServerSettingsService));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -323,6 +330,8 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      updateServerSettings: (patch: ServerSettingsPatch) =>
+        runtime!.runPromise(serverSettings.updateSettings(patch)),
       drain,
     };
   }
@@ -3823,6 +3832,51 @@ describe("ProviderRuntimeIngestion", () => {
       ["reasoning:thread-1:turn-reasoning-resumed:segment:0", "Before cleanup"],
       ["reasoning:thread-1:turn-reasoning-resumed:segment:1", "After cleanup"],
     ]);
+  });
+
+  it("preserves reasoning chunk order when delivery mode changes mid-segment", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-mode-change");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-buffered-before-mode-change"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "A" },
+    });
+    await harness.drain();
+    await harness.updateServerSettings({ enableLegacyTokenStreaming: true });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-streaming-after-mode-change"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "B" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-mode-change-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.find((message) => message.channel === "reasoning");
+
+    expect(reasoning?.text).toBe("AB");
+    expect(reasoning?.streaming).toBe(false);
   });
 
   it("streams both reasoning delta kinds live and finalizes them on session exit", async () => {

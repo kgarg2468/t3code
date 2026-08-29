@@ -91,10 +91,17 @@ interface AssistantSegmentState {
   activeMessageId: MessageId | null;
 }
 
+type AssistantDeliveryMode = "buffered" | "streaming";
+
 interface ReasoningSegmentState {
   turnId: TurnId | null;
   nextSegmentIndex: number;
-  active: { messageId: MessageId; firstDeltaAt: string; hasProjectedMessage: boolean } | null;
+  active: {
+    messageId: MessageId;
+    firstDeltaAt: string;
+    hasProjectedMessage: boolean;
+    deliveryMode: AssistantDeliveryMode;
+  } | null;
 }
 
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
@@ -1358,6 +1365,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId;
     turnId: TurnId | null;
     firstDeltaAt: string;
+    deliveryMode: AssistantDeliveryMode;
   }) =>
     Effect.gen(function* () {
       const existing = yield* getReasoningSegmentState(input.threadId);
@@ -1382,6 +1390,7 @@ const make = Effect.gen(function* () {
           ),
           firstDeltaAt: input.firstDeltaAt,
           hasProjectedMessage: false,
+          deliveryMode: input.deliveryMode,
         },
       } satisfies ReasoningSegmentState;
       yield* Cache.set(reasoningSegmentByThreadId, input.threadId, state);
@@ -1891,13 +1900,15 @@ const make = Effect.gen(function* () {
         if (openSegment?.active && openSegment.turnId !== turnId) {
           yield* finalizeActiveReasoningSegment({ event, threadId: thread.id });
         }
+        const deliveryMode = yield* getAssistantDeliveryMode;
         const reasoningState = yield* getOrCreateReasoningSegment({
           threadId: thread.id,
           turnId,
           firstDeltaAt: now,
+          deliveryMode,
         });
         const active = reasoningState.active;
-        const buffered = (yield* getAssistantDeliveryMode) === "buffered";
+        const buffered = active.deliveryMode === "buffered";
         // Buffered mode only projects when the buffer spills; streaming projects every delta.
         const projectedDelta = buffered
           ? yield* appendBufferedAssistantText(active.messageId, reasoningDelta)
