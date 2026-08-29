@@ -3944,6 +3944,70 @@ describe("ProviderRuntimeIngestion", () => {
     expect(reasoning?.every((message) => !message.streaming)).toBe(true);
   });
 
+  it("keeps active-turn reasoning open after a rejected conflicting turn start", async () => {
+    const harness = await createHarness();
+    const activeTurnId = asTurnId("turn-reasoning-active-start");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-reasoning-current-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: activeTurnId,
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-before-stale-start"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: activeTurnId,
+      payload: { streamKind: "reasoning_text", delta: "Before " },
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-reasoning-conflicting-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning-stale-start"),
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-after-stale-start"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: activeTurnId,
+      payload: { streamKind: "reasoning_text", delta: "after" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-current-turn-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:04.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: activeTurnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+
+    expect(reasoning?.map((message) => message.text)).toEqual(["Before after"]);
+    expect(reasoning?.every((message) => !message.streaming)).toBe(true);
+  });
+
   it("streams both reasoning delta kinds live and finalizes them on session exit", async () => {
     const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
     const turnId = asTurnId("turn-reasoning-streaming");

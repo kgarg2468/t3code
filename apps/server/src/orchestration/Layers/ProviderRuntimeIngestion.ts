@@ -1734,7 +1734,7 @@ const make = Effect.gen(function* () {
           orchestrationSessionStatusFromRuntimeState(event.payload.state),
         );
       if (
-        event.type === "turn.started" ||
+        (event.type === "turn.started" && shouldApplyThreadLifecycle) ||
         (event.type === "runtime.error" && !conflictsWithActiveTurn) ||
         event.type === "session.exited" ||
         terminalSessionState
