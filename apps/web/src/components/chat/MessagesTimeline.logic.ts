@@ -743,7 +743,7 @@ export function deriveMessagesTimelineRows(input: {
     if (entry.kind === "message") {
       return (
         entry.message.role === "assistant" &&
-        !isReasoningMessage(entry.message) &&
+        (!isReasoningMessage(entry.message) || entry.message.streaming) &&
         (entry.message.text?.trim().length ?? 0) > 0
       );
     }
