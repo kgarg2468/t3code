@@ -172,6 +172,25 @@ function findMessageById(
   return undefined;
 }
 
+function nextReasoningSegmentIndex(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  threadId: ThreadId,
+  turnId: TurnId | null,
+): number {
+  const prefix = `reasoning:${threadId}:${turnId ?? "turnless"}:segment:`;
+  let nextIndex = 0;
+  for (const message of messages) {
+    if (!isReasoningMessage(message) || !message.id.startsWith(prefix)) {
+      continue;
+    }
+    const segmentIndex = Number(message.id.slice(prefix.length));
+    if (Number.isSafeInteger(segmentIndex) && segmentIndex >= nextIndex) {
+      nextIndex = segmentIndex + 1;
+    }
+  }
+  return nextIndex;
+}
+
 function findProposedPlanById(
   proposedPlans: ReadonlyArray<
     Pick<OrchestrationProposedPlan, "id" | "createdAt" | "implementedAt" | "implementationThreadId">
@@ -1332,8 +1351,9 @@ const make = Effect.gen(function* () {
   const getReasoningSegmentState = (threadId: ThreadId) =>
     Cache.getOption(reasoningSegmentByThreadId, threadId).pipe(Effect.map(Option.getOrUndefined));
 
-  // A thread has at most one open reasoning segment; a new turn restarts the
-  // segment index the same way assistant segments restart on a new base key.
+  // A thread has at most one open reasoning segment. The active path stays in
+  // memory; a cold/new turn derives its next index from projected messages so
+  // cache eviction and session cleanup cannot reuse a durable message id.
   const getOrCreateReasoningSegment = (input: {
     threadId: ThreadId;
     turnId: TurnId | null;
@@ -1346,7 +1366,13 @@ const make = Effect.gen(function* () {
         return { ...existing, active: existing.active };
       }
 
-      const segmentIndex = sameTurn ? existing.nextSegmentIndex : 0;
+      const segmentIndex = sameTurn
+        ? existing.nextSegmentIndex
+        : nextReasoningSegmentIndex(
+            (yield* resolveThreadDetail(input.threadId))?.messages ?? [],
+            input.threadId,
+            input.turnId,
+          );
       const state = {
         turnId: input.turnId,
         nextSegmentIndex: segmentIndex + 1,
@@ -1375,7 +1401,7 @@ const make = Effect.gen(function* () {
       if (
         state === undefined ||
         active === null ||
-        (input.turnId !== undefined && state.turnId !== input.turnId)
+        (input.turnId !== undefined && state.turnId !== null && state.turnId !== input.turnId)
       ) {
         return;
       }
@@ -1402,7 +1428,7 @@ const make = Effect.gen(function* () {
           messageId: active.messageId,
           channel: "reasoning",
           ...(state.turnId !== null ? { turnId: state.turnId } : {}),
-          createdAt: yield* nextMessageStamp(input.threadId, active.firstDeltaAt),
+          createdAt: yield* nextMessageStamp(input.threadId, input.event.createdAt),
         });
       }
       yield* Cache.set(reasoningSegmentByThreadId, input.threadId, { ...state, active: null });

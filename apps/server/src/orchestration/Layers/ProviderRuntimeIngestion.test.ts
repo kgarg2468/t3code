@@ -3702,6 +3702,129 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(true);
   });
 
+  it("preserves buffered reasoning duration through finalization", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-duration");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-duration-start"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Thinking for a while" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-duration-end"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.find((message) => message.channel === "reasoning");
+
+    expect(reasoning?.createdAt).toBe("2026-05-01T00:00:00.000Z");
+    expect(reasoning?.updatedAt).toBe("2026-05-01T00:00:03.000Z");
+  });
+
+  it("finalizes turnless reasoning when a named turn completes", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-turnless"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { streamKind: "reasoning_text", delta: "Reasoning before turn binding" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-turnless-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning-late-bound"),
+      status: "completed",
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+
+    expect(reasoning).toEqual([
+      expect.objectContaining({
+        id: "reasoning:thread-1:turnless:segment:0",
+        streaming: false,
+        text: "Reasoning before turn binding",
+      }),
+    ]);
+  });
+
+  it("continues reasoning segment numbering after session cleanup", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-resumed");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-before-cleanup"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Before cleanup" },
+    });
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-reasoning-session-cleanup"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {},
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-after-cleanup"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "After cleanup" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-after-cleanup-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-01T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+
+    expect(reasoning?.map((message) => [message.id, message.text])).toEqual([
+      ["reasoning:thread-1:turn-reasoning-resumed:segment:0", "Before cleanup"],
+      ["reasoning:thread-1:turn-reasoning-resumed:segment:1", "After cleanup"],
+    ]);
+  });
+
   it("streams both reasoning delta kinds live and finalizes them on session exit", async () => {
     const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
     const turnId = asTurnId("turn-reasoning-streaming");

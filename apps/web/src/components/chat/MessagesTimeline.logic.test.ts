@@ -619,6 +619,48 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("does not create a turn fold for an empty completed reasoning message", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:07Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:07Z",
+            updatedAt: "2026-01-01T00:00:08Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["assistant-final-entry"]);
+  });
+
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
     // A steer ends the previous turn early: its only message completes the
     // instant it is created, and trailing work entries land after it. The

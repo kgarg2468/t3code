@@ -527,6 +527,15 @@ function timelineEntryTurnId(entry: TimelineEntry): TurnId | null {
   return entry.kind === "work" ? (entry.entry.turnId ?? null) : null;
 }
 
+function isEmptyCompletedReasoningEntry(entry: TimelineEntry): boolean {
+  return (
+    entry.kind === "message" &&
+    isReasoningMessage(entry.message) &&
+    !entry.message.streaming &&
+    entry.message.text.trim().length === 0
+  );
+}
+
 /**
  * Settled turns keep their first and terminal assistant messages visible.
  * Everything between them folds behind a "Worked for ..." row anchored at
@@ -555,6 +564,9 @@ function deriveTurnFolds(input: {
 
   let pendingUserBoundary: string | null = null;
   for (const entry of input.timelineEntries) {
+    if (isEmptyCompletedReasoningEntry(entry)) {
+      continue;
+    }
     if (entry.kind === "message" && entry.message.role === "user") {
       pendingUserBoundary = entry.message.createdAt;
       continue;
@@ -1008,11 +1020,7 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    if (
-      isReasoningMessage(timelineEntry.message) &&
-      !timelineEntry.message.streaming &&
-      timelineEntry.message.text.trim().length === 0
-    ) {
+    if (isEmptyCompletedReasoningEntry(timelineEntry)) {
       continue;
     }
 

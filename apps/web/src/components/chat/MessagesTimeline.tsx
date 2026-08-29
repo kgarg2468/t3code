@@ -1167,7 +1167,7 @@ function ReasoningTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <Icon className="size-3.5" />
       </button>
       {expanded ? (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-border/60 pl-3 text-sm leading-relaxed text-muted-foreground">
+        <div className="mt-1 whitespace-pre-wrap wrap-break-word border-l-2 border-border/60 pl-3 text-sm leading-relaxed text-muted-foreground">
           {text}
         </div>
       ) : null}
