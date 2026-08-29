@@ -2278,6 +2278,10 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (event.type === "turn.completed" || event.type === "turn.aborted") {
+        lastMessageStampMsByThreadId.delete(thread.id);
+      }
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
