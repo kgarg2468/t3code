@@ -79,6 +79,7 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveReasoningDisclosureExpanded,
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
   resolveTimelineMinimapHeightStyle,
@@ -87,6 +88,7 @@ import {
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   shouldPreserveAssistantLineBreaks,
+  toggleReasoningDisclosureExpansion,
   toolGroupAction,
   workEntryIsVisibleInGroup,
   type StableMessagesTimelineRowsState,
@@ -148,6 +150,12 @@ interface TimelineRowSharedState {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
+  reasoningExpansionOverrides: ReadonlyMap<MessageId, boolean>;
+  onToggleReasoningDisclosure: (
+    messageId: MessageId,
+    defaultExpanded: boolean,
+    anchorKey: string,
+  ) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
 }
@@ -286,6 +294,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
+  const [reasoningExpansionOverrides, setReasoningExpansionOverrides] = useState<
+    ReadonlyMap<MessageId, boolean>
+  >(new Map());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const disclosureAnchorKeyRef = useRef<string | null>(null);
@@ -374,6 +385,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         }
         return next;
       });
+    },
+    [suspendEndScrollMaintenanceForDisclosure],
+  );
+  const onToggleReasoningDisclosure = useCallback(
+    (messageId: MessageId, defaultExpanded: boolean, anchorKey: string) => {
+      suspendEndScrollMaintenanceForDisclosure(anchorKey);
+      setReasoningExpansionOverrides((existing) =>
+        toggleReasoningDisclosureExpansion(existing, messageId, defaultExpanded),
+      );
     },
     [suspendEndScrollMaintenanceForDisclosure],
   );
@@ -529,6 +549,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenTurnDiff,
       onToggleTurnFold,
       onToggleWorkGroup,
+      reasoningExpansionOverrides,
+      onToggleReasoningDisclosure,
       agentPanelModel,
       onOpenAgents,
     }),
@@ -545,6 +567,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenTurnDiff,
       onToggleTurnFold,
       onToggleWorkGroup,
+      reasoningExpansionOverrides,
+      onToggleReasoningDisclosure,
       agentPanelModel,
       onOpenAgents,
     ],
@@ -1142,9 +1166,13 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 }
 
 function ReasoningTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
   const streaming = row.message.streaming;
-  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
-  const expanded = userExpanded ?? streaming;
+  const expanded = resolveReasoningDisclosureExpanded(
+    ctx.reasoningExpansionOverrides,
+    row.message.id,
+    streaming,
+  );
   const Icon = expanded ? ChevronDownIcon : ChevronRightIcon;
   const durationMs = Date.parse(row.message.updatedAt) - Date.parse(row.message.createdAt);
   const label = streaming
@@ -1160,7 +1188,7 @@ function ReasoningTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         type="button"
         aria-expanded={expanded}
         data-scroll-anchor-ignore
-        onClick={() => setUserExpanded(!expanded)}
+        onClick={() => ctx.onToggleReasoningDisclosure(row.message.id, streaming, row.id)}
         className="flex cursor-pointer select-none items-center gap-1 rounded-md text-sm leading-relaxed text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{label}</span>

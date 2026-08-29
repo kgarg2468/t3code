@@ -75,6 +75,24 @@ export function shouldPreserveAssistantLineBreaks(text: string): boolean {
   return /^★ Insight(?:\s|─)/mu.test(text);
 }
 
+export function resolveReasoningDisclosureExpanded(
+  overrides: ReadonlyMap<MessageId, boolean>,
+  messageId: MessageId,
+  streaming: boolean,
+): boolean {
+  return overrides.get(messageId) ?? streaming;
+}
+
+export function toggleReasoningDisclosureExpansion(
+  overrides: ReadonlyMap<MessageId, boolean>,
+  messageId: MessageId,
+  defaultExpanded: boolean,
+): ReadonlyMap<MessageId, boolean> {
+  const next = new Map(overrides);
+  next.set(messageId, !(overrides.get(messageId) ?? defaultExpanded));
+  return next;
+}
+
 export function resolveTimelineMinimapHeightStyle(itemCount: number): string {
   const naturalHeight = Math.max(1, (itemCount - 1) * TIMELINE_MINIMAP_ITEM_SPACING);
   return `min(${naturalHeight}px, ${TIMELINE_MINIMAP_MAX_HEIGHT_CSS})`;

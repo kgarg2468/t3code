@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  type AssistantDeliveryMode,
   CommandId,
   MessageId,
   type OrchestrationEvent,
@@ -90,8 +91,6 @@ interface AssistantSegmentState {
   nextSegmentIndex: number;
   activeMessageId: MessageId | null;
 }
-
-type AssistantDeliveryMode = "buffered" | "streaming";
 
 interface ReasoningSegmentState {
   turnId: TurnId | null;

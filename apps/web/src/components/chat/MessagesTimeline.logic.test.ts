@@ -4,9 +4,34 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveReasoningDisclosureExpanded,
   resolveAssistantMessageCopyState,
   shouldPreserveAssistantLineBreaks,
+  toggleReasoningDisclosureExpansion,
 } from "./MessagesTimeline.logic";
+
+describe("reasoning disclosure expansion", () => {
+  it("defaults to the message streaming state when the user has not toggled it", () => {
+    const overrides = new Map();
+    const messageId = "reasoning-1" as never;
+
+    expect(resolveReasoningDisclosureExpanded(overrides, messageId, true)).toBe(true);
+    expect(resolveReasoningDisclosureExpanded(overrides, messageId, false)).toBe(false);
+  });
+
+  it("persists an explicit toggle across virtualization and stream completion", () => {
+    const messageId = "reasoning-1" as never;
+    const initial = new Map();
+    const collapsed = toggleReasoningDisclosureExpansion(initial, messageId, true);
+
+    expect(collapsed).not.toBe(initial);
+    expect(resolveReasoningDisclosureExpanded(initial, messageId, true)).toBe(true);
+    expect(resolveReasoningDisclosureExpanded(collapsed, messageId, true)).toBe(false);
+
+    const expanded = toggleReasoningDisclosureExpansion(collapsed, messageId, true);
+    expect(resolveReasoningDisclosureExpanded(expanded, messageId, false)).toBe(true);
+  });
+});
 
 describe("shouldPreserveAssistantLineBreaks", () => {
   it("preserves Claude insight formatting without changing regular markdown", () => {
