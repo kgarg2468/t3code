@@ -1396,15 +1396,58 @@ const make = Effect.gen(function* () {
       return state;
     });
 
-  // Closes the thread's open reasoning segment; `turnId` limits the close to a
-  // segment opened by that turn.
-  const finalizeActiveReasoningSegment = (input: {
+  // Durable complement to the in-memory reasoning segment: after a restart or
+  // cache eviction a projected reasoning row can still be streaming with no
+  // state left to close it, so settle it straight from the projection. The
+  // turn guard mirrors finalizeActiveReasoningSegment: a named turn closes
+  // its own and turnless rows, never another turn's.
+  const completeProjectedStreamingReasoning = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
+      const messages = (yield* resolveThreadDetail(input.threadId))?.messages ?? [];
+      for (const message of messages) {
+        if (!isReasoningMessage(message) || !message.streaming) {
+          continue;
+        }
+        if (
+          input.turnId !== undefined &&
+          message.turnId !== null &&
+          message.turnId !== input.turnId
+        ) {
+          continue;
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: yield* providerCommandId(input.event, "reasoning-recover-complete"),
+          threadId: input.threadId,
+          messageId: message.id,
+          channel: "reasoning",
+          ...(message.turnId !== null ? { turnId: message.turnId } : {}),
+          createdAt: yield* nextMessageStamp(input.threadId, input.event.createdAt),
+        });
+      }
+    });
+
+  // Closes the thread's open reasoning segment; `turnId` limits the close to a
+  // segment opened by that turn. `recoverProjected` also settles reasoning
+  // rows left streaming in the projection when the in-memory state was lost
+  // (restart, TTL, capacity eviction); only terminal/pause boundaries pass it
+  // so hot paths never load thread detail.
+  const finalizeActiveReasoningSegment = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    turnId?: TurnId;
+    recoverProjected?: boolean;
+  }) =>
+    Effect.gen(function* () {
       const state = yield* getReasoningSegmentState(input.threadId);
+      if (state === undefined && input.recoverProjected === true) {
+        yield* completeProjectedStreamingReasoning(input);
+        return;
+      }
       const active = state?.active ?? null;
       if (
         state === undefined ||
@@ -1738,12 +1781,17 @@ const make = Effect.gen(function* () {
         event.type === "session.exited" ||
         terminalSessionState
       ) {
-        yield* finalizeActiveReasoningSegment({ event, threadId: thread.id });
+        yield* finalizeActiveReasoningSegment({
+          event,
+          threadId: thread.id,
+          recoverProjected: true,
+        });
       } else if (event.type === "turn.completed" || event.type === "turn.aborted") {
         yield* finalizeActiveReasoningSegment({
           event,
           threadId: thread.id,
           ...(eventTurnId !== undefined ? { turnId: eventTurnId } : {}),
+          recoverProjected: true,
         });
       }
 
@@ -1941,6 +1989,15 @@ const make = Effect.gen(function* () {
           ? toTurnId(event.turnId)
           : undefined;
       if (pauseForUserTurnId) {
+        // A user-facing pause also settles in-flight reasoning so it does not
+        // stay "Thinking" or absorb human wait time; tool_user_input requests
+        // emit no activity, so nothing later would close it.
+        yield* finalizeActiveReasoningSegment({
+          event,
+          threadId: thread.id,
+          turnId: pauseForUserTurnId,
+          recoverProjected: true,
+        });
         const detailedThread = yield* getLoadedThreadDetail();
         const assistantDeliveryMode = yield* getAssistantDeliveryMode;
         const flushedMessageIds =

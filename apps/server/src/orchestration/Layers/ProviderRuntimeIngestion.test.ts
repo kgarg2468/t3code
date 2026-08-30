@@ -4132,4 +4132,217 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(finalReasoningComplete?.sequence).toBeLessThan(activity?.sequence ?? 0);
   });
+
+  it("completes a persisted streaming reasoning message after in-memory segment loss", async () => {
+    const harness = await createHarness();
+    const recoveredTurnId = asTurnId("turn-reasoning-recovered");
+
+    // Seed projected streaming rows directly through the engine so the
+    // ingestion caches never learn about them, modeling a server restart or
+    // cache eviction between streaming and turn settlement.
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-recovered-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turn-reasoning-recovered:segment:0"),
+      delta: "Recovered thinking",
+      channel: "reasoning",
+      turnId: recoveredTurnId,
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-unrelated-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turn-reasoning-unrelated:segment:0"),
+      delta: "Unrelated thinking",
+      channel: "reasoning",
+      turnId: asTurnId("turn-reasoning-unrelated"),
+      createdAt: "2026-05-05T00:00:01.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-substantive-assistant"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("assistant:item-reasoning-recovered"),
+      delta: "Streaming answer",
+      turnId: recoveredTurnId,
+      createdAt: "2026-05-05T00:00:02.000Z",
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-recovered-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-05T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: recoveredTurnId,
+      status: "completed",
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const messages = readModel.threads.find((entry) => entry.id === "thread-1")?.messages ?? [];
+    const byId = new Map(messages.map((message) => [message.id, message]));
+
+    const recovered = byId.get(
+      asMessageId("reasoning:thread-1:turn-reasoning-recovered:segment:0"),
+    );
+    expect(recovered?.streaming).toBe(false);
+    expect(recovered?.text).toBe("Recovered thinking");
+    expect(recovered?.updatedAt).toBe("2026-05-05T00:00:03.000Z");
+    // Reasoning owned by another turn and substantive assistant output stay
+    // untouched by the recovery.
+    expect(
+      byId.get(asMessageId("reasoning:thread-1:turn-reasoning-unrelated:segment:0"))?.streaming,
+    ).toBe(true);
+    expect(byId.get(asMessageId("assistant:item-reasoning-recovered"))?.streaming).toBe(true);
+  });
+
+  it("finalizes active reasoning when a tool user-input request opens", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-tool-input");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-before-tool-input"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-06T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Considering the question" },
+    });
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-tool-input-request-opened"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-06T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      requestId: ApprovalRequestId.make("req-tool-input"),
+      payload: { requestType: "tool_user_input", detail: "Pick one" },
+    });
+    await harness.drain();
+
+    const pausedModel = await harness.readModel();
+    const pausedReasoning = pausedModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+    expect(pausedReasoning).toEqual([
+      expect.objectContaining({
+        id: "reasoning:thread-1:turn-reasoning-tool-input:segment:0",
+        streaming: false,
+        text: "Considering the question",
+        updatedAt: "2026-05-06T00:00:01.000Z",
+      }),
+    ]);
+
+    // Reasoning after the human answers lands in a new segment instead of
+    // extending the paused one with wait time.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-after-tool-input"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-06T00:05:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "After the answer" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-tool-input-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-06T00:05:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+    expect(reasoning?.map((message) => [message.id, message.text])).toEqual([
+      ["reasoning:thread-1:turn-reasoning-tool-input:segment:0", "Considering the question"],
+      ["reasoning:thread-1:turn-reasoning-tool-input:segment:1", "After the answer"],
+    ]);
+  });
+
+  it("finalizes active reasoning when user input is requested", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-user-input");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-before-user-input"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-07T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Weighing options" },
+    });
+    harness.emit({
+      type: "user-input.requested",
+      eventId: asEventId("evt-reasoning-user-input-requested"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-07T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      requestId: ApprovalRequestId.make("req-reasoning-user-input"),
+      payload: {
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Pick one",
+            options: [{ label: "A", description: "Option A" }],
+          },
+        ],
+      },
+    });
+    await harness.drain();
+
+    const pausedModel = await harness.readModel();
+    const pausedReasoning = pausedModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+    expect(pausedReasoning).toEqual([
+      expect.objectContaining({
+        id: "reasoning:thread-1:turn-reasoning-user-input:segment:0",
+        streaming: false,
+        text: "Weighing options",
+        updatedAt: "2026-05-07T00:00:01.000Z",
+      }),
+    ]);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-after-user-input"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-07T00:10:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "After the reply" },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-reasoning-user-input-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-07T00:10:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "cancelled" },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const reasoning = readModel.threads
+      .find((entry) => entry.id === "thread-1")
+      ?.messages.filter((message) => message.channel === "reasoning");
+    expect(reasoning?.map((message) => [message.id, message.text])).toEqual([
+      ["reasoning:thread-1:turn-reasoning-user-input:segment:0", "Weighing options"],
+      ["reasoning:thread-1:turn-reasoning-user-input:segment:1", "After the reply"],
+    ]);
+  });
 });
