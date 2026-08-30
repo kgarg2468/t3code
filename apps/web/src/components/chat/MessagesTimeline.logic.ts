@@ -576,9 +576,6 @@ function deriveTurnFolds(input: {
 
   let pendingUserBoundary: string | null = null;
   for (const entry of input.timelineEntries) {
-    if (isEmptyCompletedReasoningEntry(entry)) {
-      continue;
-    }
     if (entry.kind === "message" && entry.message.role === "user") {
       pendingUserBoundary = entry.message.createdAt;
       continue;
@@ -700,16 +697,23 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  const durationStartByMessageId = computeMessageDurationStart(
-    input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+  // A whitespace-only completed reasoning message renders no row, so every
+  // derivation below (folds, forward/backward work-group scans, the row loop)
+  // must see the same list without it — otherwise an invisible entry breaks
+  // work-group adjacency.
+  const timelineEntries = input.timelineEntries.filter(
+    (entry) => !isEmptyCompletedReasoningEntry(entry),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const durationStartByMessageId = computeMessageDurationStart(
+    timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+  );
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const unsettledTurnId = deriveUnsettledTurnId(
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
   const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries: input.timelineEntries,
+    timelineEntries,
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
     unsettledTurnId,
@@ -723,13 +727,13 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  let activeTurnHeaderIndex = input.timelineEntries.length;
+  let activeTurnHeaderIndex = timelineEntries.length;
   if (input.isWorking) {
-    const latestUserMessageIndex = lastUserMessageIndex(input.timelineEntries);
+    const latestUserMessageIndex = lastUserMessageIndex(timelineEntries);
     const firstOwnedAfterUser =
       unsettledTurnId === null
         ? -1
-        : input.timelineEntries.findIndex(
+        : timelineEntries.findIndex(
             (entry, index) =>
               index > latestUserMessageIndex && timelineEntryTurnId(entry) === unsettledTurnId,
           );
@@ -746,8 +750,8 @@ export function deriveMessagesTimelineRows(input: {
     entry.toolLifecycleStatus === "inProgress" &&
     entry.turnId === unsettledTurnId;
   const activeToolEntries: Array<Extract<TimelineEntry, { kind: "work" }>> = [];
-  for (let index = input.timelineEntries.length - 1; index >= activeTurnHeaderIndex; index -= 1) {
-    const entry = input.timelineEntries[index]!;
+  for (let index = timelineEntries.length - 1; index >= activeTurnHeaderIndex; index -= 1) {
+    const entry = timelineEntries[index]!;
     if (
       !entryBelongsToActiveTurn(entry, index) ||
       entry.kind !== "work" ||
@@ -797,8 +801,8 @@ export function deriveMessagesTimelineRows(input: {
     }
   };
 
-  for (let index = 0; index < input.timelineEntries.length; index += 1) {
-    const timelineEntry = input.timelineEntries[index];
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const timelineEntry = timelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -841,8 +845,8 @@ export function deriveMessagesTimelineRows(input: {
       }
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < input.timelineEntries.length) {
-        const nextEntry = input.timelineEntries[cursor];
+      while (cursor < timelineEntries.length) {
+        const nextEntry = timelineEntries[cursor];
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
@@ -947,10 +951,6 @@ export function deriveMessagesTimelineRows(input: {
         createdAt: timelineEntry.createdAt,
         turnPlan: timelineEntry.turnPlan,
       });
-      continue;
-    }
-
-    if (isEmptyCompletedReasoningEntry(timelineEntry)) {
       continue;
     }
 

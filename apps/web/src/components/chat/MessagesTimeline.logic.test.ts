@@ -750,6 +750,174 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.map((row) => row.id)).toEqual(["assistant-final-entry"]);
   });
 
+  it("groups work across an invisible empty completed reasoning entry", () => {
+    // A whitespace-only completed reasoning message renders no row, so it must
+    // not split adjacent work entries into two work-toggle groups either.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry-2",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "work-2",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+      ],
+      isWorking: false,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["work-toggle:work-entry-1"]);
+    expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
+      hiddenCount: 2,
+      summary: "Ran 2 commands",
+    });
+  });
+
+  it("keeps the live work group when an empty completed reasoning entry trails it", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "latest-command-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:05Z",
+          entry: {
+            id: "latest-command",
+            createdAt: "2026-01-01T00:00:05Z",
+            turnId: "turn-1" as never,
+            label: "Ran rg",
+            command: "rg toolCall",
+            requestKind: "command",
+            tone: "tool" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["work-live"]);
+    expect(rows.find((row) => row.kind === "work-live")).toMatchObject({
+      entry: { id: "latest-command" },
+      groupedEntries: [{ id: "latest-command" }],
+    });
+  });
+
+  it("still splits work groups on a non-empty completed reasoning entry", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Weighing the next step.",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry-2",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "work-2",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+      ],
+      isWorking: false,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "work-toggle:work-entry-1",
+      "reasoning-entry",
+      "work-toggle:work-entry-2",
+    ]);
+  });
+
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
     // A steer ends the previous turn early: its only message completes the
     // instant it is created, and trailing work entries land after it. The
