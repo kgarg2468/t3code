@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Appearance](#appearance)
 
 ## Concepts
 
@@ -48,7 +49,7 @@ An optional discriminator on a message in [the contracts][1]. No channel means o
 
 #### Reasoning message
 
-An assistant message with `channel: "reasoning"`, holding one burst of provider thinking. It is deliberately inert: [ProjectionPipeline.ts][11] does not let it settle a turn, [CheckpointReactor.ts][6] leaves it out of checkpoints, and [ProviderCommandReactor.ts][12] drops it from thread-title context. Delivery reuses the [assistant delivery mode](#assistant-delivery-mode) chosen in [ProviderRuntimeIngestion.ts][5]. The web timeline renders each one as a collapsible "Thought" row in [MessagesTimeline.tsx][25], excluded from timeline search and the minimap by [MessagesTimeline.logic.ts][26]; mobile filters them out entirely. See [reasoning][27] for the shipped behavior.
+An assistant message with `channel: "reasoning"`, holding one burst of provider thinking. It is deliberately inert: [ProjectionPipeline.ts][11] does not let it settle a turn, [CheckpointReactor.ts][6] leaves it out of checkpoints, and [ProviderCommandReactor.ts][12] drops it from thread-title context. Delivery reuses the [assistant delivery mode](#assistant-delivery-mode) chosen in [ProviderRuntimeIngestion.ts][5]. The web timeline renders each one as a collapsible "Thought" row in [MessagesTimeline.tsx][27], excluded from timeline search and the minimap by [MessagesTimeline.logic.ts][28]; mobile filters them out entirely. See [reasoning][29] for the shipped behavior.
 
 ### Orchestration
 
@@ -152,6 +153,21 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Appearance
+
+#### Environment theme
+
+A theme an environment's machine publishes for clients to follow, one file per theme under `themes/` in that environment's state directory; the filename is the theme id. [environmentTheme.ts][25] watches the directory and streams the set over `subscribeServerConfig`; clients render each as a library card, generating a full palette when the file carries seed colors and using the palette directly when it is a standard exported theme file. A desktop that retints its apps when the system theme changes rewrites its file, so T3 Code follows along without a restart. See [environment-theme.md][26].
+
+#### Default theme
+
+The environment's theme, held in its `settings.json` as `defaultTheme` (with `defaultThemeSetAt`
+as the set-generation) and set with `t3 theme set <id>`. Web and desktop clients apply each set
+once — live when connected, on the next connect otherwise — so setting it switches them, while a
+theme a user picks in Settings afterwards sticks until the next set; mobile keeps its own
+appearance settings. Naming a published [environment theme](#environment-theme) is how a desktop
+ships T3 Code already matching it.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -191,6 +207,8 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
-[25]: ../../apps/web/src/components/chat/MessagesTimeline.tsx
-[26]: ../../apps/web/src/components/chat/MessagesTimeline.logic.ts
-[27]: ../user/reasoning.md
+[25]: ../../apps/server/src/environmentTheme.ts
+[26]: ../user/environment-theme.md
+[27]: ../../apps/web/src/components/chat/MessagesTimeline.tsx
+[28]: ../../apps/web/src/components/chat/MessagesTimeline.logic.ts
+[29]: ../user/reasoning.md
