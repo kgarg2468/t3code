@@ -4199,6 +4199,160 @@ describe("ProviderRuntimeIngestion", () => {
     expect(byId.get(asMessageId("assistant:item-reasoning-recovered"))?.streaming).toBe(true);
   });
 
+  it("recovers an orphaned streaming reasoning segment when a delta creates its replacement", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-reasoning-replaced");
+
+    // Seed projected streaming rows directly through the engine so the
+    // ingestion caches never learn about them, modeling a server restart or
+    // cache eviction between streaming and the next reasoning delta.
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-orphaned-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turn-reasoning-replaced:segment:0"),
+      delta: "Orphaned thinking",
+      channel: "reasoning",
+      turnId,
+      createdAt: "2026-05-08T00:00:00.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-other-turn-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turn-reasoning-other:segment:0"),
+      delta: "Unrelated thinking",
+      channel: "reasoning",
+      turnId: asTurnId("turn-reasoning-other"),
+      createdAt: "2026-05-08T00:00:01.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-substantive-assistant-replaced"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("assistant:item-reasoning-replaced"),
+      delta: "Streaming answer",
+      turnId,
+      createdAt: "2026-05-08T00:00:02.000Z",
+    });
+
+    // The new delta creates a replacement segment and repopulates the cache,
+    // so the terminal boundary no longer sees a wholly absent state; the
+    // orphaned row must still settle.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-replacement-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-08T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { streamKind: "reasoning_text", delta: "Replacement thinking" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-replaced-turn-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-08T00:00:04.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      status: "completed",
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const messages = readModel.threads.find((entry) => entry.id === "thread-1")?.messages ?? [];
+    const byId = new Map(messages.map((message) => [message.id, message]));
+
+    // The orphan settles at the replacement delta, not the turn boundary, so
+    // its duration does not absorb the rest of the turn.
+    const orphan = byId.get(asMessageId("reasoning:thread-1:turn-reasoning-replaced:segment:0"));
+    expect(orphan?.streaming).toBe(false);
+    expect(orphan?.text).toBe("Orphaned thinking");
+    expect(orphan?.updatedAt).toBe("2026-05-08T00:00:03.000Z");
+
+    const replacement = byId.get(
+      asMessageId("reasoning:thread-1:turn-reasoning-replaced:segment:1"),
+    );
+    expect(replacement?.streaming).toBe(false);
+    expect(replacement?.text).toBe("Replacement thinking");
+
+    expect(
+      messages.filter((message) => message.channel === "reasoning" && message.turnId === turnId),
+    ).toHaveLength(2);
+    // Reasoning owned by another turn and substantive assistant output stay
+    // untouched by the recovery.
+    expect(
+      byId.get(asMessageId("reasoning:thread-1:turn-reasoning-other:segment:0"))?.streaming,
+    ).toBe(true);
+    expect(byId.get(asMessageId("assistant:item-reasoning-replaced"))?.streaming).toBe(true);
+  });
+
+  it("scopes turnless replacement-delta recovery to turnless reasoning rows", async () => {
+    // Streaming mode projects the replacement delta immediately, so the
+    // mid-stream state right after recovery is observable.
+    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
+
+    // Seed projected streaming rows the ingestion caches never learn about: a
+    // turnless orphan and a named-turn row that must survive the recovery.
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-turnless-orphan-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turnless:segment:0"),
+      delta: "Orphaned turnless thinking",
+      channel: "reasoning",
+      createdAt: "2026-05-09T00:00:00.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.delta",
+      commandId: CommandId.make("cmd-seed-named-turn-reasoning"),
+      threadId: asThreadId("thread-1"),
+      messageId: asMessageId("reasoning:thread-1:turn-reasoning-named:segment:0"),
+      delta: "Named-turn thinking",
+      channel: "reasoning",
+      turnId: asTurnId("turn-reasoning-named"),
+      createdAt: "2026-05-09T00:00:01.000Z",
+    });
+
+    // A turnless delta on the cold path must settle only the turnless orphan,
+    // never sweep the named turn's row.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-replacement-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-09T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { streamKind: "reasoning_text", delta: "Turnless replacement thinking" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turnless-replacement-turn-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-05-09T00:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-late-bound"),
+      status: "completed",
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const messages = readModel.threads.find((entry) => entry.id === "thread-1")?.messages ?? [];
+    const byId = new Map(messages.map((message) => [message.id, message]));
+
+    const orphan = byId.get(asMessageId("reasoning:thread-1:turnless:segment:0"));
+    expect(orphan?.streaming).toBe(false);
+    expect(orphan?.text).toBe("Orphaned turnless thinking");
+    expect(orphan?.updatedAt).toBe("2026-05-09T00:00:02.000Z");
+
+    const replacement = byId.get(asMessageId("reasoning:thread-1:turnless:segment:1"));
+    expect(replacement?.streaming).toBe(false);
+    expect(replacement?.text).toBe("Turnless replacement thinking");
+
+    expect(
+      byId.get(asMessageId("reasoning:thread-1:turn-reasoning-named:segment:0"))?.streaming,
+    ).toBe(true);
+  });
+
   it("finalizes active reasoning when a tool user-input request opens", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-reasoning-tool-input");

@@ -1400,11 +1400,13 @@ const make = Effect.gen(function* () {
   // cache eviction a projected reasoning row can still be streaming with no
   // state left to close it, so settle it straight from the projection. The
   // turn guard mirrors finalizeActiveReasoningSegment: a named turn closes
-  // its own and turnless rows, never another turn's.
+  // its own and turnless rows, never another turn's; `null` closes turnless
+  // rows only; omitting `turnId` is the deliberate unscoped terminal/session
+  // sweep that closes everything.
   const completeProjectedStreamingReasoning = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
-    turnId?: TurnId;
+    turnId?: TurnId | null;
   }) =>
     Effect.gen(function* () {
       const messages = (yield* resolveThreadDetail(input.threadId))?.messages ?? [];
@@ -1946,6 +1948,18 @@ const make = Effect.gen(function* () {
         // Reasoning from another turn closes the segment the previous turn opened.
         if (openSegment?.active && openSegment.turnId !== turnId) {
           yield* finalizeActiveReasoningSegment({ event, threadId: thread.id });
+        }
+        // Wholly absent state means a projected row left streaming is an
+        // orphan (restart, TTL, capacity eviction). Settle it before the
+        // replacement below repopulates the cache — after that the terminal
+        // recoverProjected path can no longer see the loss. This scans the
+        // projection only on the cold path, which loads thread detail anyway.
+        if (openSegment === undefined) {
+          yield* completeProjectedStreamingReasoning({
+            event,
+            threadId: thread.id,
+            turnId,
+          });
         }
         const deliveryMode = yield* getAssistantDeliveryMode;
         const reasoningState = yield* getOrCreateReasoningSegment({
