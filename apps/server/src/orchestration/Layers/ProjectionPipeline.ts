@@ -286,7 +286,10 @@ function retainProjectionMessagesAfterRevert(
   }
 
   const retainedAssistantCount = messages.filter(
-    (message) => message.role === "assistant" && retainedMessageIds.has(message.messageId),
+    (message) =>
+      message.role === "assistant" &&
+      message.channel !== "reasoning" &&
+      retainedMessageIds.has(message.messageId),
   ).length;
   const missingAssistantCount = Math.max(0, turnCount - retainedAssistantCount);
   if (missingAssistantCount > 0) {
@@ -294,6 +297,7 @@ function retainProjectionMessagesAfterRevert(
       .filter(
         (message) =>
           message.role === "assistant" &&
+          message.channel !== "reasoning" &&
           !retainedMessageIds.has(message.messageId) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
       )

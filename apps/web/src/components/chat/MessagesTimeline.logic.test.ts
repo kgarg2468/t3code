@@ -1021,6 +1021,70 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.find((row) => row.kind === "working")).toMatchObject({ showThinking: true });
   });
 
+  it("restores the Thinking label once the active turn's only reasoning message completes", () => {
+    // Regression: activeTurnHasVisibleContent treats any non-empty assistant
+    // message as live visible content, including a *completed* reasoning
+    // message. Once the thought finishes and the turn has no substantive
+    // assistant text and no in-progress tool, the working row is the only
+    // signal the agent is still busy, so it must show the generic Thinking
+    // label again.
+    const makeInput = (reasoningStreaming: boolean) => ({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user" as const,
+            text: "Go",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-1" as never,
+            role: "assistant" as const,
+            channel: "reasoning" as const,
+            text: "Weighing the options",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: reasoningStreaming,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running" as const,
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    // While the reasoning text still streams it is itself a live Thinking
+    // disclosure, so the redundant generic label stays suppressed.
+    const streamingRows = deriveMessagesTimelineRows(makeInput(true));
+    expect(streamingRows.find((row) => row.kind === "working")).toMatchObject({
+      showThinking: false,
+    });
+
+    const completedRows = deriveMessagesTimelineRows(makeInput(false));
+    expect(completedRows.find((row) => row.kind === "working")).toMatchObject({
+      showThinking: true,
+    });
+  });
+
   it("still splits work groups on a non-empty completed reasoning entry", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

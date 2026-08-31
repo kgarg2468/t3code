@@ -760,7 +760,12 @@ export function deriveMessagesTimelineRows(input: {
     : [];
   const activeTurnHasVisibleContent = activeEntries.some((entry) => {
     if (entry.kind === "message") {
-      return entry.message.role === "assistant" && (entry.message.text?.trim().length ?? 0) > 0;
+      if (entry.message.role !== "assistant" || (entry.message.text?.trim().length ?? 0) === 0) {
+        return false;
+      }
+      // Completed reasoning is a transcript artifact, not live output; it only
+      // counts as visible content while it is still streaming.
+      return isReasoningMessage(entry.message) ? entry.message.streaming : true;
     }
     if (entry.kind === "work") {
       return (
