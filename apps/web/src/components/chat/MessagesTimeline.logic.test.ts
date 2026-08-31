@@ -4,9 +4,34 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveReasoningDisclosureExpanded,
   resolveAssistantMessageCopyState,
   shouldPreserveAssistantLineBreaks,
+  toggleReasoningDisclosureExpansion,
 } from "./MessagesTimeline.logic";
+
+describe("reasoning disclosure expansion", () => {
+  it("defaults to the message streaming state when the user has not toggled it", () => {
+    const overrides = new Map();
+    const messageId = "reasoning-1" as never;
+
+    expect(resolveReasoningDisclosureExpanded(overrides, messageId, true)).toBe(true);
+    expect(resolveReasoningDisclosureExpanded(overrides, messageId, false)).toBe(false);
+  });
+
+  it("persists an explicit toggle across virtualization and stream completion", () => {
+    const messageId = "reasoning-1" as never;
+    const initial = new Map();
+    const collapsed = toggleReasoningDisclosureExpansion(initial, messageId, true);
+
+    expect(collapsed).not.toBe(initial);
+    expect(resolveReasoningDisclosureExpanded(initial, messageId, true)).toBe(true);
+    expect(resolveReasoningDisclosureExpanded(collapsed, messageId, true)).toBe(false);
+
+    const expanded = toggleReasoningDisclosureExpansion(collapsed, messageId, true);
+    expect(resolveReasoningDisclosureExpanded(expanded, messageId, false)).toBe(true);
+  });
+});
 
 describe("shouldPreserveAssistantLineBreaks", () => {
   it("preserves Claude insight formatting without changing regular markdown", () => {
@@ -93,7 +118,10 @@ describe("computeMessageDurationStart", () => {
     );
   });
 
-  it("does not advance the boundary for a streaming message", () => {
+  it.each([
+    { label: "streaming", streaming: true },
+    { label: "completed reasoning", streaming: false, channel: "reasoning" as const },
+  ])("does not advance the boundary for a $label message", ({ streaming, channel }) => {
     const result = computeMessageDurationStart([
       {
         id: "u1",
@@ -105,9 +133,10 @@ describe("computeMessageDurationStart", () => {
       {
         id: "a1",
         role: "assistant",
+        ...(channel ? { channel } : {}),
         createdAt: "2026-01-01T00:00:30Z",
         updatedAt: "2026-01-01T00:00:40Z",
-        streaming: true,
+        streaming,
       },
       {
         id: "a2",
@@ -268,6 +297,23 @@ describe("resolveAssistantMessageCopyState", () => {
     ).toEqual({
       text: "Interim thought",
       visible: false,
+    });
+  });
+
+  it("copies the rendered representation of Codex directives", () => {
+    expect(
+      resolveAssistantMessageCopyState({
+        showCopyButton: true,
+        text: [
+          'Created :codex-file-citation{path="outputs/report.xlsx" purpose="output"}.',
+          "",
+          '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}',
+        ].join("\n"),
+        streaming: false,
+      }),
+    ).toEqual({
+      text: "Created [report.xlsx](<outputs/report.xlsx>).\n\nHello World (Document template)",
+      visible: true,
     });
   });
 });
@@ -452,7 +498,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("keeps the first and terminal assistant messages visible around settled work", () => {
+  it("folds the first assistant message and settled work before the terminal response", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -528,7 +574,6 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.label).toBe("Worked for 22s");
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
       "assistant-final-entry",
     ]);
@@ -544,8 +589,8 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(expandedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
+      "assistant-first-entry",
       "work-toggle:work-entry-1",
       "assistant-final-entry",
     ]);
@@ -554,7 +599,7 @@ describe("deriveMessagesTimelineRows", () => {
     ).toBeDefined();
   });
 
-  it("folds assistant messages between the first and terminal messages", () => {
+  it("folds all assistant messages before the terminal message", () => {
     const timelineEntries = [
       {
         id: "assistant-first-entry",
@@ -608,10 +653,493 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
+    expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
+  });
+
+  it("anchors the turn fold at leading reasoning and folds it with the rest of the turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "reasoning-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Thinking",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-first-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-first" as never,
+            role: "assistant",
+            text: "I am checking the implementation.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:05Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:05Z",
+            turnId: "turn-1" as never,
+            label: "Read files",
+            tone: "tool",
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:07Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
+    expect(rows.find((row) => row.kind === "turn-fold")).toMatchObject({
+      createdAt: "2026-01-01T00:00:01Z",
+    });
+  });
+
+  it("does not create a turn fold for an empty completed reasoning message", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Done",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:07Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:07Z",
+            updatedAt: "2026-01-01T00:00:08Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["assistant-final-entry"]);
+  });
+
+  it("groups work across an invisible empty completed reasoning entry", () => {
+    // A whitespace-only completed reasoning message renders no row, so it must
+    // not split adjacent work entries into two work-toggle groups either.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry-2",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "work-2",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["work-toggle:work-entry-1"]);
+    expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
+      hiddenCount: 2,
+      summary: "Ran 2 commands",
+    });
+  });
+
+  it("keeps the live work group when an empty completed reasoning entry trails it", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "latest-command-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:05Z",
+          entry: {
+            id: "latest-command",
+            createdAt: "2026-01-01T00:00:05Z",
+            turnId: "turn-1" as never,
+            label: "Ran rg",
+            command: "rg toolCall",
+            requestKind: "command",
+            tone: "tool" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["working", "work-live"]);
+    expect(rows.find((row) => row.kind === "work-live")).toMatchObject({
+      entry: { id: "latest-command" },
+      groupedEntries: [{ id: "latest-command" }],
+    });
+  });
+
+  it("keeps the Thinking label when filtered empty reasoning precedes the active-turn header", () => {
+    // Empty completed reasoning entries are filtered before indices are
+    // computed, so they must not shift active-turn membership onto prior-turn
+    // entries and hide the Thinking label.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "reasoning-empty-entry-1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-empty-1" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry-2",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning-empty-2" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-prior-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-prior" as never,
+            role: "assistant",
+            text: "Earlier answer",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Next question",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-streaming-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "reasoning-streaming" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: true,
+          },
+        },
+      ],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const workingRow = rows.find((row) => row.kind === "working");
+    expect(workingRow).toMatchObject({ showThinking: true });
+  });
+
+  it("shows the working indicator when trailing filtered empty reasoning ends the timeline", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Go",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["user-entry", "working-indicator-row"]);
+    expect(rows.find((row) => row.kind === "working")).toMatchObject({ showThinking: true });
+  });
+
+  it("restores the Thinking label once the active turn's only reasoning message completes", () => {
+    // Regression: activeTurnHasVisibleContent treats any non-empty assistant
+    // message as live visible content, including a *completed* reasoning
+    // message. Once the thought finishes and the turn has no substantive
+    // assistant text and no in-progress tool, the working row is the only
+    // signal the agent is still busy, so it must show the generic Thinking
+    // label again.
+    const makeInput = (reasoningStreaming: boolean) => ({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user" as const,
+            text: "Go",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-1" as never,
+            role: "assistant" as const,
+            channel: "reasoning" as const,
+            text: "Weighing the options",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: reasoningStreaming,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running" as const,
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    // While the reasoning text still streams it is itself a live Thinking
+    // disclosure, so the redundant generic label stays suppressed.
+    const streamingRows = deriveMessagesTimelineRows(makeInput(true));
+    expect(streamingRows.find((row) => row.kind === "working")).toMatchObject({
+      showThinking: false,
+    });
+
+    const completedRows = deriveMessagesTimelineRows(makeInput(false));
+    expect(completedRows.find((row) => row.kind === "working")).toMatchObject({
+      showThinking: true,
+    });
+  });
+
+  it("still splits work groups on a non-empty completed reasoning entry", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+        {
+          id: "reasoning-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Weighing the next step.",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry-2",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "work-2",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Ran command",
+            tone: "tool" as const,
+            itemType: "command_execution" as const,
+            toolLifecycleStatus: "completed" as const,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
     expect(rows.map((row) => row.id)).toEqual([
-      "assistant-first-entry",
-      "turn-fold:turn-1",
-      "assistant-final-entry",
+      "work-toggle:work-entry-1",
+      "reasoning-entry",
+      "work-toggle:work-entry-2",
     ]);
   });
 
@@ -1310,6 +1838,21 @@ describe("deriveMessagesTimelineRows", () => {
             streaming: false,
           },
         },
+        {
+          id: "reasoning-tail-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:40Z",
+          message: {
+            id: "reasoning-tail" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "Considering a follow-up.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:40Z",
+            updatedAt: "2026-01-01T00:00:45Z",
+            streaming: false,
+          },
+        },
       ],
       expandedTurnIds: new Set(["turn-1" as never]),
       isWorking: false,
@@ -1323,7 +1866,8 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" && row.message.role === "assistant",
     );
 
-    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
+    expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true, false]);
+    expect(assistantRows.map((row) => row.showAssistantCopyButton)).toEqual([false, true, false]);
   });
 
   it("withholds assistant metadata while the active turn is still in progress", () => {
@@ -1365,7 +1909,10 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.showAssistantCopyButton).toBe(false);
   });
 
-  it("models work log overflow expansion as inserted list rows", () => {
+  it.each([
+    ["tools", "tool", "Used 3 tools"],
+    ["tools and status updates", "info", "Used 2 tools and received 1 update"],
+  ] as const)("expands %s through the same activity group", (_, middleTone, summary) => {
     const timelineEntries = [
       {
         id: "work-entry-1",
@@ -1386,9 +1933,9 @@ describe("deriveMessagesTimelineRows", () => {
         entry: {
           id: "work-2",
           createdAt: "2026-01-01T00:00:02Z",
-          label: "edit",
+          label: "Status updated",
           detail: "Editing MessagesTimeline.tsx",
-          tone: "tool" as const,
+          tone: middleTone,
         },
       },
       {
@@ -1423,8 +1970,7 @@ describe("deriveMessagesTimelineRows", () => {
       groupId: "work-group:work-entry-1",
       hiddenCount: 3,
       expanded: false,
-      onlyToolEntries: true,
-      summary: "Used 3 tools",
+      summary,
     });
     expect(expandedRows.map((row) => row.id)).toEqual([
       "work-toggle:work-entry-1",
@@ -1476,7 +2022,7 @@ describe("deriveMessagesTimelineRows", () => {
     ["an error-toned entry recovers", ["error", "info", "completed"], false],
     ["the final failure is hidden", ["completed", "failed", "info"], true],
     ["the final failure is visible", ["failed", "info", "failed"], true],
-    ["the only failure is visible", ["completed", "info", "failed"], false],
+    ["the only failure is visible", ["completed", "info", "failed"], true],
   ] as const)(
     "uses the final tool call for mixed work groups when %s",
     (_, statuses, hasFailure) => {
@@ -1512,10 +2058,18 @@ describe("deriveMessagesTimelineRows", () => {
       });
 
       expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
-        hiddenCount: 2,
-        summary: null,
+        hiddenCount: statuses.some((status) => status === "error") ? 2 : 3,
+        summary: statuses.some((status) => status === "error")
+          ? "Received 1 update and used 1 tool"
+          : "Used 2 tools and received 1 update",
         hasFailure,
       });
+      if (statuses.some((status) => status === "error")) {
+        expect(rows[0]).toMatchObject({
+          kind: "work",
+          groupedEntries: [{ tone: "error", label: "Command failed" }],
+        });
+      }
     },
   );
 });
