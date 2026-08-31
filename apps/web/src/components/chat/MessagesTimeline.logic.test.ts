@@ -882,6 +882,145 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("keeps the Thinking label when filtered empty reasoning precedes the active-turn header", () => {
+    // Empty completed reasoning entries are filtered before indices are
+    // computed, so they must not shift active-turn membership onto prior-turn
+    // entries and hide the Thinking label.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "reasoning-empty-entry-1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-empty-1" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry-2",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:02Z",
+          message: {
+            id: "reasoning-empty-2" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "  ",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:02Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-prior-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-prior" as never,
+            role: "assistant",
+            text: "Earlier answer",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Next question",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-streaming-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:06Z",
+          message: {
+            id: "reasoning-streaming" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:06Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: true,
+          },
+        },
+      ],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const workingRow = rows.find((row) => row.kind === "working");
+    expect(workingRow).toMatchObject({ showThinking: true });
+  });
+
+  it("shows the working indicator when trailing filtered empty reasoning ends the timeline", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Go",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "reasoning-empty-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "reasoning-empty" as never,
+            role: "assistant",
+            channel: "reasoning",
+            text: "",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["user-entry", "working-indicator-row"]);
+    expect(rows.find((row) => row.kind === "working")).toMatchObject({ showThinking: true });
+  });
+
   it("still splits work groups on a non-empty completed reasoning entry", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

@@ -756,7 +756,7 @@ export function deriveMessagesTimelineRows(input: {
   const isVisibleActiveToolEntry = (entry: WorkLogEntry) =>
     workLogEntryIsToolLike(entry) && workEntryIsVisibleInGroup(entry, true);
   const activeEntries = input.isWorking
-    ? input.timelineEntries.filter((entry, index) => entryBelongsToActiveTurn(entry, index))
+    ? timelineEntries.filter((entry, index) => entryBelongsToActiveTurn(entry, index))
     : [];
   const activeTurnHasVisibleContent = activeEntries.some((entry) => {
     if (entry.kind === "message") {
@@ -1072,7 +1072,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.isWorking && activeTurnHeaderIndex === input.timelineEntries.length) {
+  if (input.isWorking && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
 
